@@ -1,0 +1,116 @@
+name: "Terraform Infrastructure Operations"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: "Target Environment"
+        required: true
+        default: "dev"
+        options:
+          - dev
+          - staging
+          - prod
+      action:
+        type: choice
+        description: "Terraform Action"
+        required: true
+        default: "plan"
+        options:
+          - plan
+          - apply
+          - destroy
+      confirm_destroy:
+        type: string
+        description: "SAFETY: If selecting 'destroy', type 'destroy' below to proceed."
+        required: false
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: "us-east-1"
+  TF_VERSION: "1.7.0"
+
+jobs:
+  pre-flight-check:
+    name: "Pre-Flight & Safety Verification"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Source Code"
+        uses: actions/checkout@v4
+
+      # Safety Gate for Accidental Destruction
+      - name: "Validate Destruction Guardrail"
+        if: ${{ github.event.inputs.action == 'destroy' }}
+        run: |
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "destroy" ]; then
+            echo "::error ::Destruction aborted! You must explicitly type 'destroy' in the confirm_destroy field."
+            exit 1
+          fi
+          echo "Destruction safety confirmed by operator."
+
+      # App Quality Gate (Assessment Section 2.C Requirement)
+      - name: "Run Backend Unit Tests"
+        run: |
+          cd app/backend
+          npm ci
+          npm test
+
+  terraform:
+    name: "TF ${{ github.event.inputs.action }} [${{ github.event.inputs.environment }}]"
+    needs: pre-flight-check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./terraform
+    steps:
+      - name: "Checkout Source Code"
+        uses: actions/checkout@v4
+
+      # AWS Authentication via OIDC
+      - name: "Assume AWS Role via OIDC"
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          audience: "sts.amazonaws.com"
+          role-session-name: "GitHubActions-Terraform-${{ github.run_id }}"
+
+      - name: "Setup Terraform"
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: "Terraform Init"
+        run: terraform init
+
+      - name: "Terraform Validate"
+        run: terraform validate
+
+      # 1. PLAN ACTION
+      - name: "Terraform Plan"
+        if: ${{ github.event.inputs.action == 'plan' }}
+        run: |
+          terraform plan \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="aws_region=${{ env.AWS_REGION }}"
+
+      # 2. APPLY ACTION
+      - name: "Terraform Apply"
+        if: ${{ github.event.inputs.action == 'apply' }}
+        run: |
+          terraform apply -auto-approve \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="aws_region=${{ env.AWS_REGION }}"
+
+      # 3. DESTROY ACTION
+      - name: "Terraform Destroy"
+        if: ${{ github.event.inputs.action == 'destroy' }}
+        run: |
+          terraform destroy -auto-approve \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="aws_region=${{ env.AWS_REGION }}"
