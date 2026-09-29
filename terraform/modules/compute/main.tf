@@ -118,7 +118,7 @@ resource "aws_lb_listener_rule" "backend_rule" {
 
   condition {
     path_pattern {
-      values = ["/api/*", "/health", "/metrics"]
+      values = ["/api/*"] # Only /api/* is public!
     }
   }
 }
@@ -175,14 +175,16 @@ resource "aws_ecs_task_definition" "backend" {
       image     = "${aws_ecr_repository.backend.repository_url}:latest"
       essential = true
       portMappings = [{ containerPort = 3000, hostPort = 3000 }]
-      environment = [
-        { name = "NODE_ENV", value = var.environment },
-        { name = "PORT", value = "3000" },
-        { name = "DB_HOST", value = var.db_host },
-        { name = "DB_NAME", value = var.db_name },
-        { name = "DB_USER", value = var.db_username },
-        { name = "DB_PASS", value = var.db_password }
+      
+      # Pull ALL environment variables securely from Secrets Manager JSON keys
+      secrets = [
+        { name = "DB_HOST", valueFrom = "${var.app_secret_arn}:DB_HOST::" },
+        { name = "DB_USER", valueFrom = "${var.app_secret_arn}:DB_USER::" },
+        { name = "DB_PASS", valueFrom = "${var.app_secret_arn}:DB_PASS::" },
+        { name = "DB_NAME", valueFrom = "${var.app_secret_arn}:DB_NAME::" },
+        { name = "PORT",    valueFrom = "${var.app_secret_arn}:PORT::" }
       ]
+      
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -262,4 +264,18 @@ resource "aws_ecs_service" "frontend" {
     container_name   = "frontend"
     container_port   = 8080
   }
+}
+
+resource "aws_iam_role_policy" "ecs_secrets_policy" {
+  name = "${var.environment}-ecs-secrets-policy"
+  role = aws_iam_role.ecs_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = [var.app_secret_arn]
+    }]
+  })
 }

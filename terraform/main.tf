@@ -1,4 +1,4 @@
-# 1. Networking Module (VPC, Subnets, NAT Gateway)
+# 1. Networking Module
 module "networking" {
   source               = "./modules/networking"
   environment          = var.environment
@@ -8,32 +8,38 @@ module "networking" {
   availability_zones   = ["us-east-1a", "us-east-1b"]
 }
 
-# 2. Database Module (RDS MySQL 8.0, Encrypted, Private Subnets)
+# 2. Database Module (Generates password and spins up encrypted RDS)
 module "database" {
   source      = "./modules/database"
   environment = var.environment
   vpc_id      = module.networking.vpc_id
   subnet_ids  = module.networking.private_subnet_ids
   db_name     = var.db_name
-  db_username = var.db_username
-  db_password = var.db_password
 }
 
-# 3. Compute Module (ALB, ECS Fargate, ECR, SG Ingress Rule)
+# 3. Secrets Manager Module (Bundles all config into Secrets Manager)
+module "secrets" {
+  source      = "./modules/secrets"
+  environment = var.environment
+  db_host     = module.database.db_endpoint
+  db_user     = module.database.db_user
+  db_password = module.database.db_password
+  db_name     = var.db_name
+  app_port    = "3000"
+}
+
+# 4. Compute Module (ALB + ECS Fargate pulling from Secrets Manager)
 module "compute" {
-  source                = "./modules/compute"
-  environment           = var.environment
-  vpc_id                = module.networking.vpc_id
-  public_subnet_ids     = module.networking.public_subnet_ids
-  private_subnet_ids    = module.networking.private_subnet_ids
-  db_host               = module.database.db_endpoint
-  db_name               = var.db_name
-  db_username           = var.db_username
-  db_password           = var.db_password
-  db_security_group_id  = module.database.db_security_group_id
+  source               = "./modules/compute"
+  environment          = var.environment
+  vpc_id               = module.networking.vpc_id
+  public_subnet_ids    = module.networking.public_subnet_ids
+  private_subnet_ids   = module.networking.private_subnet_ids
+  db_security_group_id = module.database.db_security_group_id
+  app_secret_arn       = module.secrets.secret_arn
 }
 
-# 4. Monitoring Module (CloudWatch Logs, ALB 5XX Metric Alarm, SNS Alerts)
+# 5. Monitoring Module (CloudWatch Alarms & SNS)
 module "monitoring" {
   source         = "./modules/monitoring"
   environment    = var.environment
