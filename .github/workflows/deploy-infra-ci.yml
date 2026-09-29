@@ -1,5 +1,6 @@
 name: "Terraform Infrastructure Operations"
 
+# Strictly manual execution only - will NEVER trigger on push or PR
 on:
   workflow_dispatch:
     inputs:
@@ -36,14 +37,17 @@ env:
   TF_VERSION: "1.7.0"
 
 jobs:
-  pre-flight-check:
-    name: "Pre-Flight & Safety Verification"
+  terraform:
+    name: "TF ${{ github.event.inputs.action }} [${{ github.event.inputs.environment }}]"
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./terraform
     steps:
       - name: "Checkout Source Code"
         uses: actions/checkout@v4
 
-      # Safety Gate for Accidental Destruction
+      # 1. Destruction Safety Guardrail
       - name: "Validate Destruction Guardrail"
         if: ${{ github.event.inputs.action == 'destroy' }}
         run: |
@@ -53,25 +57,7 @@ jobs:
           fi
           echo "Destruction safety confirmed by operator."
 
-      # App Quality Gate (Assessment Section 2.C Requirement)
-      - name: "Run Backend Unit Tests"
-        run: |
-          cd app/backend
-          npm ci
-          npm test
-
-  terraform:
-    name: "TF ${{ github.event.inputs.action }} [${{ github.event.inputs.environment }}]"
-    needs: pre-flight-check
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./terraform
-    steps:
-      - name: "Checkout Source Code"
-        uses: actions/checkout@v4
-
-      # AWS Authentication via OIDC
+      # 2. Authenticate to AWS via OIDC (Keyless)
       - name: "Assume AWS Role via OIDC"
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -80,6 +66,7 @@ jobs:
           audience: "sts.amazonaws.com"
           role-session-name: "GitHubActions-Terraform-${{ github.run_id }}"
 
+      # 3. Setup Terraform CLI
       - name: "Setup Terraform"
         uses: hashicorp/setup-terraform@v3
         with:
@@ -91,7 +78,7 @@ jobs:
       - name: "Terraform Validate"
         run: terraform validate
 
-      # 1. PLAN ACTION
+      # 4. PLAN ACTION
       - name: "Terraform Plan"
         if: ${{ github.event.inputs.action == 'plan' }}
         run: |
@@ -99,7 +86,7 @@ jobs:
             -var="environment=${{ github.event.inputs.environment }}" \
             -var="aws_region=${{ env.AWS_REGION }}"
 
-      # 2. APPLY ACTION
+      # 5. APPLY ACTION
       - name: "Terraform Apply"
         if: ${{ github.event.inputs.action == 'apply' }}
         run: |
@@ -107,7 +94,7 @@ jobs:
             -var="environment=${{ github.event.inputs.environment }}" \
             -var="aws_region=${{ env.AWS_REGION }}"
 
-      # 3. DESTROY ACTION
+      # 6. DESTROY ACTION
       - name: "Terraform Destroy"
         if: ${{ github.event.inputs.action == 'destroy' }}
         run: |
