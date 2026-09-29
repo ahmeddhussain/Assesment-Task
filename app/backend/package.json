@@ -1,0 +1,13 @@
+{
+  "name": "devops-backend",
+  "version": "1.0.0",
+  "description": "3-Tier API for DevOps Assessment",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node server.test.js"
+  },
+  "dependencies": {
+    "mysql2": "^3.9.0"
+  }
+}
