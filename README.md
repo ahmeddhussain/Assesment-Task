@@ -149,8 +149,13 @@ docker compose down -v
 To prevent chicken-and-egg dependency locks, the S3 state bucket and GitHub Actions IAM OIDC provider are configured once out-of-band before Terraform executes.
 
 ### 1. Configure the S3 State Storage Bucket
-Create an S3 bucket via the console to enable
-`State locking` which uses native S3 conditional writes (`use_lockfile = true`) in Terraform 1.10+, eliminating DynamoDB costs.
+Create an S3 bucket via the console and The state bucket is configured out-of-band with:
+- S3 Block Public Access enabled
+- S3 Versioning enabled
+- Server-side encryption enabled
+- Access restricted to the Terraform deployment identity
+- No public bucket access
+- enable `State locking` which uses native S3 conditional writes (`use_lockfile = true`) in Terraform 1.10+, eliminating DynamoDB costs.
 
 ### 2. Configure GitHub Actions OIDC Provider & IAM Role
 1. **Identity Provider:** Open **IAM** → **Identity Providers** → **Add Provider** (`OpenID Connect`, URL: `https://token.actions.githubusercontent.com`, Audience: `sts.amazonaws.com`).
@@ -232,6 +237,12 @@ $$\text{Networking} \longrightarrow \text{Database} \longrightarrow \text{Secret
 | **GitHub Actions Role** | Assumed strictly through OIDC; no long-lived access keys. Trust policy validates repo claim `repo:ahmeddhussain/Assesment-Task:*`. |
 | **ECS Task Execution Role** | Assumed by the **AWS ECS Agent** at launch (outside the container). Grants permissions to pull images from Amazon ECR, stream logs to CloudWatch (`PutLogEvents`), and decrypt credentials from Secrets Manager (`secretsmanager:GetSecretValue` on `${var.app_secret_arn}*`). |
 | **ECS Task Role** | Assumed by the **application code at runtime** (inside the container). Scoped with **zero AWS permissions** (strict least privilege): because the Node.js API connects to MySQL over standard TCP (:3306) and makes no AWS SDK calls, a compromised container possesses no AWS credentials to access cloud APIs. |
+
+#### Note on ECS Egress:
+
+ECS task egress is currently allowed to `0.0.0.0/0` because Fargate tasks require outbound access through the NAT Gateway for AWS service communication such as ECR, CloudWatch Logs, and Secrets Manager.
+
+For a production deployment, VPC endpoints would be introduced for supported AWS services to reduce NAT dependency and further restrict outbound traffic.
 
 ### Network Micro-Segmentation
 
@@ -423,6 +434,8 @@ Practical compromises made to align with the 4–6 hour scope and AWS sandbox bu
 * **HTTP-Only Public Entrypoint:** Avoids requiring a registered domain and public ACM certificate validation.
 * **Image Provenance vs Admission Enforcement:** Images are signed with Cosign to establish build provenance. Admission-controller signature verification is not enforced at Fargate launch time.
 * **Single State Key:** A single state key is used in `backend.tf` for this assessment demo. Multi-environment architectures would use dedicated state prefixes per environment.
+* **Terraform uses the `latest` ECR tag only for the initial ECS service bootstrap.** Normal application deployments do not use `latest`. GitHub Actions builds and pushes images using the immutable Git commit SHA:`<git-sha>`. The CI/CD workflow then registers a new ECS task definition using that SHA-tagged image and deploys it to ECS.
+
 
 ---
 
