@@ -194,8 +194,8 @@ resource "aws_iam_role_policy" "ecs_secrets_policy" {
 
 resource "aws_ecr_repository" "frontend" {
   name                 = "${var.environment}-frontend"
-  image_tag_mutability = "MUTABLE" # CI also pushes a moving :latest used for first bootstrap
-  force_delete         = true      # assessment only
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = true # assessment only
 
   image_scanning_configuration {
     scan_on_push = true
@@ -210,7 +210,7 @@ resource "aws_ecr_repository" "frontend" {
 
 resource "aws_ecr_repository" "backend" {
   name                 = "${var.environment}-backend"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
   force_delete         = true
 
   image_scanning_configuration {
@@ -274,7 +274,7 @@ resource "aws_ecs_task_definition" "backend" {
   container_definitions = jsonencode([
     {
       name         = "backend"
-      image        = "${aws_ecr_repository.backend.repository_url}:latest" # bootstrap tag; CI deploys immutable :<git-sha>
+      image        = "${aws_ecr_repository.backend.repository_url}:latest"
       essential    = true
       portMappings = [{ containerPort = 3000, hostPort = 3000 }]
 
