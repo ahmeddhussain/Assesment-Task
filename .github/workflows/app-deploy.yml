@@ -84,7 +84,7 @@ jobs:
         run: docker build -t "$IMAGE:$IMAGE_TAG" .
 
       - name: "Trivy Scan (fails on CRITICAL)"
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ENVIRONMENT }}-${{ matrix.service }}:${{ github.sha }}'
           format: 'table'
