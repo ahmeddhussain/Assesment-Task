@@ -1,4 +1,7 @@
-# --- Security Groups ---
+# ==========================================
+# 1. SECURITY GROUPS
+# ==========================================
+
 resource "aws_security_group" "alb_sg" {
   name        = "${var.environment}-alb-sg"
   description = "Allow inbound HTTP from internet"
@@ -60,7 +63,10 @@ resource "aws_security_group_rule" "ecs_to_db" {
   security_group_id        = var.db_security_group_id
 }
 
-# --- ALB & Target Groups ---
+# ==========================================
+# 2. ALB & TARGET GROUPS
+# ==========================================
+
 resource "aws_lb" "main" {
   name               = "${var.environment}-alb"
   internal           = false
@@ -78,7 +84,7 @@ resource "aws_lb_target_group" "frontend" {
   target_type = "ip"
 
   health_check {
-    path = "/"
+    path    = "/"
     matcher = "200"
   }
 }
@@ -91,7 +97,7 @@ resource "aws_lb_target_group" "backend" {
   target_type = "ip"
 
   health_check {
-    path = "/health"
+    path    = "/health"
     matcher = "200"
   }
 }
@@ -118,12 +124,15 @@ resource "aws_lb_listener_rule" "backend_rule" {
 
   condition {
     path_pattern {
-      values = ["/api/*"] # Only /api/* is public!
+      values = ["/api/*"] # Only /api/* is public
     }
   }
 }
 
-# --- ECS Cluster & IAM ---
+# ==========================================
+# 3. ECS CLUSTER & IAM ROLES
+# ==========================================
+
 resource "aws_ecs_cluster" "main" {
   name = "${var.environment}-ecs-cluster"
   tags = { Name = "${var.environment}-ecs-cluster" }
@@ -147,7 +156,40 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# --- ECR Repositories ---
+# Allow ECS to create CloudWatch Log Groups automatically
+resource "aws_iam_role_policy" "ecs_logs_policy" {
+  name = "${var.environment}-ecs-logs-policy"
+  role = aws_iam_role.ecs_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogGroup"]
+      Resource = "arn:aws:logs:us-east-1:*:log-group:/ecs/*"
+    }]
+  })
+}
+
+# Allow ECS to read the application configuration from Secrets Manager
+resource "aws_iam_role_policy" "ecs_secrets_policy" {
+  name = "${var.environment}-ecs-secrets-policy"
+  role = aws_iam_role.ecs_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = "${var.app_secret_arn}*"
+    }]
+  })
+}
+
+# ==========================================
+# 4. ECR REPOSITORIES
+# ==========================================
+
 resource "aws_ecr_repository" "frontend" {
   name                 = "${var.environment}-frontend"
   image_tag_mutability = "MUTABLE"
@@ -160,7 +202,10 @@ resource "aws_ecr_repository" "backend" {
   force_delete         = true
 }
 
-# --- Task Definitions ---
+# ==========================================
+# 5. TASK DEFINITIONS
+# ==========================================
+
 resource "aws_ecs_task_definition" "backend" {
   family                   = "${var.environment}-backend-task"
   network_mode             = "awsvpc"
@@ -171,11 +216,11 @@ resource "aws_ecs_task_definition" "backend" {
 
   container_definitions = jsonencode([
     {
-      name      = "backend"
-      image     = "${aws_ecr_repository.backend.repository_url}:latest"
-      essential = true
+      name         = "backend"
+      image        = "${aws_ecr_repository.backend.repository_url}:latest"
+      essential    = true
       portMappings = [{ containerPort = 3000, hostPort = 3000 }]
-      
+
       # Pull ALL environment variables securely from Secrets Manager JSON keys
       secrets = [
         { name = "DB_HOST", valueFrom = "${var.app_secret_arn}:DB_HOST::" },
@@ -184,7 +229,7 @@ resource "aws_ecs_task_definition" "backend" {
         { name = "DB_NAME", valueFrom = "${var.app_secret_arn}:DB_NAME::" },
         { name = "PORT",    valueFrom = "${var.app_secret_arn}:PORT::" }
       ]
-      
+
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -208,10 +253,11 @@ resource "aws_ecs_task_definition" "frontend" {
 
   container_definitions = jsonencode([
     {
-      name      = "frontend"
-      image     = "${aws_ecr_repository.frontend.repository_url}:latest"
-      essential = true
+      name         = "frontend"
+      image        = "${aws_ecr_repository.frontend.repository_url}:latest"
+      essential    = true
       portMappings = [{ containerPort = 8080, hostPort = 8080 }]
+
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -225,7 +271,10 @@ resource "aws_ecs_task_definition" "frontend" {
   ])
 }
 
-# --- Services ---
+# ==========================================
+# 6. ECS SERVICES
+# ==========================================
+
 resource "aws_ecs_service" "backend" {
   name            = "${var.environment}-backend-service"
   cluster         = aws_ecs_cluster.main.id
@@ -264,47 +313,4 @@ resource "aws_ecs_service" "frontend" {
     container_name   = "frontend"
     container_port   = 8080
   }
-}
-
-resource "aws_iam_role_policy" "ecs_secrets_policy" {
-  name = "${var.environment}-ecs-secrets-policy"
-  role = aws_iam_role.ecs_execution_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [var.app_secret_arn]
-    }]
-  })
-}
-# Allow ECS to create CloudWatch Log Groups automatically
-resource "aws_iam_role_policy" "ecs_logs_policy" {
-  name = "${var.environment}-ecs-logs-policy"
-  role = aws_iam_role.ecs_execution_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["logs:CreateLogGroup"]
-      Resource = "arn:aws:logs:us-east-1:*:log-group:/ecs/*"
-    }]
-  })
-}
-# Allow ECS to read the application configuration from Secrets Manager
-resource "aws_iam_role_policy" "ecs_secrets_policy" {
-  name = "${var.environment}-ecs-secrets-policy"
-  role = aws_iam_role.ecs_execution_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      # Using a wildcard at the end ensures the random 6-character suffix AWS adds doesn't cause a mismatch
-      Resource = "${var.app_secret_arn}*"
-    }]
-  })
 }
