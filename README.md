@@ -2,7 +2,7 @@
 
 # 3-Tier Cloud Platform & Pipeline DevOps Task
  
-### Serverless Automated Cloud Architecture on AWS
+### 3-Tier Containerized Cloud Architecture on AWS
 
 **Terraform • AWS ECS Fargate • Amazon RDS MySQL 8.0 • AWS Secrets Manager • GitHub Actions (OIDC) • Trivy • Cosign • CloudWatch • Docker Compose**
 
@@ -86,7 +86,7 @@ Database Host:      dev-mysql-db.c83skyye8aus.us-east-1.rds.amazonaws.com (Priva
 1. **Ingress:** Clients reach the internet-facing **Application Load Balancer (ALB)** on port 80 across public subnets.
 2. **Routing:** ALB forwards `/api/*` to the **backend** target group and default `/` traffic to the **frontend** target group.
 3. **Compute Isolation:** Frontend and backend run as **ECS Fargate tasks in private subnets** without public IP addresses. Security groups accept ingress strictly from the ALB security group.
-4. **Data Isolation:** Backend tasks communicate with **Amazon RDS MySQL 8.0** over port 3306. The RDS security group permits inbound traffic strictly from the backend ECS task security group, with no blanket egress rule.
+4. **Data Isolation:** Backend tasks communicate with **Amazon RDS MySQL 8.0** over port 3306. The RDS security group permits inbound traffic strictly from the backend ECS task security group.
 5. **Runtime Secret Injection:** At task boot, ECS dynamically fetches credentials from **AWS Secrets Manager** and injects them directly into the backend container's memory via the task execution role.
 6. **Egress:** Private tasks route through an **AWS NAT Gateway** in the public subnet for external dependencies (ECR image pulls and AWS API endpoints).
 7. **Observability:** Tasks stream logs to **CloudWatch Logs**, four metric alarms monitor system health, and alerts publish to an **SNS topic** that notifies subscribed emails.
@@ -215,7 +215,7 @@ $$\text{Networking} \longrightarrow \text{Database} \longrightarrow \text{Secret
 - Dual-AZ VPC (`10.0.0.0/16`) using dynamic `data.aws_availability_zones` lookups. Public subnets route to IGW; private subnets route to a single NAT Gateway.
 
 **`database`:** 
-- Encrypted `db.t3.micro` RDS MySQL 8.0. Master password is generated via `random_password`. Configured with explicit `multi_az = false`, 1-day backup retention, and no blanket egress rule on its security group.
+- Encrypted `db.t3.micro` RDS MySQL 8.0. Master password is generated via `random_password`. Configured with explicit `multi_az = false`, 1-day backup retention, only allow traffic from ecs task sg ID.
 
 **`secrets`:** 
 - Single AWS Secrets Manager secret with a fixed name (`${var.environment}-app-secrets`) and `recovery_window_in_days = 0`, ensuring repeatable applies without resource replacement.
@@ -254,7 +254,7 @@ For a production deployment, VPC endpoints would be introduced for supported AWS
      │ (Port 8080 & 3000 strictly from ALB SG ID)
      ▼
 [ ECS Container Security Group ]
-     │ (Port 3306 strictly from ECS Task SG ID - No blanket egress)
+     │ (Port 3306 strictly from ECS Task SG ID )
      ▼
 [ RDS Database Security Group ]
 ```
