@@ -279,3 +279,17 @@ resource "aws_iam_role_policy" "ecs_secrets_policy" {
     }]
   })
 }
+# Allow ECS to create CloudWatch Log Groups automatically
+resource "aws_iam_role_policy" "ecs_logs_policy" {
+  name = "${var.environment}-ecs-logs-policy"
+  role = aws_iam_role.ecs_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogGroup"]
+      Resource = "arn:aws:logs:us-east-1:*:log-group:/ecs/*"
+    }]
+  })
+}
