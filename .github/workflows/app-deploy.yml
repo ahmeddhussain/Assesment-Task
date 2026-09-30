@@ -1,0 +1,145 @@
+name: "Application Build, SecScan & Deploy"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-deploy.yml'
+
+permissions:
+  id-token: write      # Required for AWS OIDC AND Cosign Keyless Signing
+  contents: read
+
+env:
+  AWS_REGION: "us-east-1"
+  ENVIRONMENT: "dev"
+  
+jobs:
+  test-application:
+    name: "Unit Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: "Run Backend Tests"
+        run: |
+          cd app/backend
+          npm ci
+          npm test
+
+  build-scan-sign-deploy:
+    name: "Build, Scan, Sign & Deploy"
+    needs: test-application
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      # 1. Install Cosign (Sigstore)
+      - name: "Install Cosign"
+        uses: sigstore/cosign-installer@v3.4.0
+
+      # 2. Authenticate to AWS
+      - name: "Assume AWS Role via OIDC"
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          audience: "sts.amazonaws.com"
+
+      # 3. Login to AWS ECR
+      - name: "Login to Amazon ECR"
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ==========================================
+      # 4. BACKEND: Build, Scan, Push, Sign
+      # ==========================================
+      - name: "Build Backend Image"
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: "${{ env.ENVIRONMENT }}-backend"
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          cd app/backend
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+
+      - name: "Trivy Scan: Backend Image"
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ENVIRONMENT }}-backend:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1' # Fails the pipeline if CRITICAL vulnerabilities exist
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL'
+
+      - name: "Push & Sign Backend Image"
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: "${{ env.ENVIRONMENT }}-backend"
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Push the SHA tag and Latest tag
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          
+          # Cosign Keyless Signature attached directly to the ECR Image SHA
+          cosign sign --yes $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # ==========================================
+      # 5. FRONTEND: Build, Scan, Push, Sign
+      # ==========================================
+      - name: "Build Frontend Image"
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: "${{ env.ENVIRONMENT }}-frontend"
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          cd app/frontend
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+
+      - name: "Trivy Scan: Frontend Image"
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ENVIRONMENT }}-frontend:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL'
+
+      - name: "Push & Sign Frontend Image"
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: "${{ env.ENVIRONMENT }}-frontend"
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          cosign sign --yes $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # ==========================================
+      # 6. DEPLOY TO AWS ECS
+      # ==========================================
+      - name: "Deploy to Amazon ECS (Zero Downtime Rolling Update)"
+        run: |
+          aws ecs update-service \
+            --cluster "${{ env.ENVIRONMENT }}-ecs-cluster" \
+            --service "${{ env.ENVIRONMENT }}-backend-service" \
+            --force-new-deployment
+
+          aws ecs update-service \
+            --cluster "${{ env.ENVIRONMENT }}-ecs-cluster" \
+            --service "${{ env.ENVIRONMENT }}-frontend-service" \
+            --force-new-deployment
