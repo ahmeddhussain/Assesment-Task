@@ -209,7 +209,7 @@ $$\text{Networking} \longrightarrow \text{Database} \longrightarrow \text{Secret
  **`networking`:** 
 - Dual-AZ VPC (`10.0.0.0/16`) using dynamic `data.aws_availability_zones` lookups. Public subnets route to IGW; private subnets route to a single NAT Gateway.
 
-***`database`:** 
+**`database`:** 
 - Encrypted `db.t3.micro` RDS MySQL 8.0. Master password is generated via `random_password`. Configured with explicit `multi_az = false`, 1-day backup retention, and no blanket egress rule on its security group.
 
 **`secrets`:** 
@@ -230,8 +230,8 @@ $$\text{Networking} \longrightarrow \text{Database} \longrightarrow \text{Secret
 | Identity | Security Scope |
 |---|---|
 | **GitHub Actions Role** | Assumed strictly through OIDC; no long-lived access keys. Trust policy validates repo claim `repo:ahmeddhussain/Assesment-Task:*`. |
-| **ECS Task Execution Role** | Permits pulling images from ECR, streaming logs, and reading **only the application secret** (`secretsmanager:GetSecretValue` on `${var.app_secret_arn}*`). Cannot create arbitrary log groups. |
-| **ECS Task Role** | Distinct from execution role; scoped with zero unnecessary permissions for runtime tasks. |
+| **ECS Task Execution Role** | Assumed by the **AWS ECS Agent** at launch (outside the container). Grants permissions to pull images from Amazon ECR, stream logs to CloudWatch (`PutLogEvents`), and decrypt credentials from Secrets Manager (`secretsmanager:GetSecretValue` on `${var.app_secret_arn}*`). |
+| **ECS Task Role** | Assumed by the **application code at runtime** (inside the container). Scoped with **zero AWS permissions** (strict least privilege): because the Node.js API connects to MySQL over standard TCP (:3306) and makes no AWS SDK calls, a compromised container possesses no AWS credentials to access cloud APIs. |
 
 ### Network Micro-Segmentation
 
