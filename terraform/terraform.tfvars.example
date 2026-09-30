@@ -1,0 +1,3 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+# In CI this value comes from the ALERT_EMAIL GitHub secret via TF_VAR_alert_email.
+alert_email = "ahmed@example.com"

@@ -1,7 +1,7 @@
 resource "aws_secretsmanager_secret" "app_secrets" {
-  name                    = "${var.environment}-app-secrets-${formatdate("YYYYMMDDhhmmss", timestamp())}"
-  recovery_window_in_days = 0 # Allows instant recreation on destroy
-  
+  name                    = "${var.environment}-app-secrets"
+  recovery_window_in_days = 0 # instant recreation on destroy (assessment only - use 7-30 in production)
+
   tags = {
     Name = "${var.environment}-app-secrets"
   }
@@ -10,7 +10,7 @@ resource "aws_secretsmanager_secret" "app_secrets" {
 resource "aws_secretsmanager_secret_version" "app_secrets_val" {
   secret_id = aws_secretsmanager_secret.app_secrets.id
 
-  # All environment variables stored together securely as JSON
+  # All environment variables stored together as one JSON secret
   secret_string = jsonencode({
     DB_HOST = var.db_host
     DB_USER = var.db_user

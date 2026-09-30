@@ -413,7 +413,6 @@ Verify that the database is completely blocked from the public internet:
 nc -zv -w 3 dev-mysql-db.c83skyye8aus.us-east-1.rds.amazonaws.com 3306
 ```
 * **Result:** `Connection timed out` or `Operation timed out`. Demonstrates that private subnets and security group chaining actively drop external TCP packets.
-![alt text](screenshots/app-success.png)
 
 ### 3. Information Disclosure & Perimeter Lockdown Test
 Verify that internal metrics and diagnostics cannot be scraped publicly:

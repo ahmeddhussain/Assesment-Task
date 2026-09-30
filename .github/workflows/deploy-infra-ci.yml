@@ -35,6 +35,10 @@ permissions:
 env:
   AWS_REGION: "us-east-1"
   TF_VERSION: "1.10.0"
+  TF_INPUT: "false"
+  TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }} # no email address stored in the repo
+  TF_VAR_environment: ${{ github.event.inputs.environment }}
+  TF_VAR_aws_region: "us-east-1"
 
 jobs:
   terraform:
@@ -47,17 +51,19 @@ jobs:
       - name: "Checkout Source Code"
         uses: actions/checkout@v4
 
-      # 1. Destruction Safety Guardrail
+      # 1. Destruction safety guardrail (input passed via env, never interpolated into the script)
       - name: "Validate Destruction Guardrail"
         if: ${{ github.event.inputs.action == 'destroy' }}
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm_destroy }}
         run: |
-          if [ "${{ github.event.inputs.confirm_destroy }}" != "destroy" ]; then
+          if [ "$CONFIRM" != "destroy" ]; then
             echo "::error ::Destruction aborted! You must explicitly type 'destroy' in the confirm_destroy field."
             exit 1
           fi
           echo "Destruction safety confirmed by operator."
 
-      # 2. Authenticate to AWS via OIDC (Keyless)
+      # 2. Authenticate to AWS via OIDC (keyless)
       - name: "Assume AWS Role via OIDC"
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -72,32 +78,26 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: "Terraform Format Check"
+        run: terraform fmt -check -recursive
+
       - name: "Terraform Init"
         run: terraform init
 
       - name: "Terraform Validate"
         run: terraform validate
 
-      # 4. PLAN ACTION
+      # 4. PLAN
       - name: "Terraform Plan"
         if: ${{ github.event.inputs.action == 'plan' }}
-        run: |
-          terraform plan \
-            -var="environment=${{ github.event.inputs.environment }}" \
-            -var="aws_region=${{ env.AWS_REGION }}"
+        run: terraform plan
 
-      # 5. APPLY ACTION
+      # 5. APPLY
       - name: "Terraform Apply"
         if: ${{ github.event.inputs.action == 'apply' }}
-        run: |
-          terraform apply -auto-approve \
-            -var="environment=${{ github.event.inputs.environment }}" \
-            -var="aws_region=${{ env.AWS_REGION }}"
+        run: terraform apply -auto-approve
 
-      # 6. DESTROY ACTION
+      # 6. DESTROY
       - name: "Terraform Destroy"
         if: ${{ github.event.inputs.action == 'destroy' }}
-        run: |
-          terraform destroy -auto-approve \
-            -var="environment=${{ github.event.inputs.environment }}" \
-            -var="aws_region=${{ env.AWS_REGION }}"
+        run: terraform destroy -auto-approve

@@ -7,16 +7,25 @@ on:
     paths:
       - 'app/**'
       - '.github/workflows/app-deploy.yml'
+  workflow_dispatch:
 
 permissions:
-  id-token: write      # Required for AWS OIDC AND Cosign Keyless Signing
+  id-token: write # AWS OIDC + Cosign keyless signing
   contents: read
+
+# Never run two deployments at once
+concurrency:
+  group: app-deploy
+  cancel-in-progress: false
 
 env:
   AWS_REGION: "us-east-1"
   ENVIRONMENT: "dev"
-  
+
 jobs:
+  # ------------------------------------------------------------------
+  # 1. TEST
+  # ------------------------------------------------------------------
   test-application:
     name: "Unit Tests"
     runs-on: ubuntu-latest
@@ -27,27 +36,87 @@ jobs:
       - name: "Setup Node.js"
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22 # same major version as the Docker image
+          cache: npm
+          cache-dependency-path: app/backend/package-lock.json
 
       - name: "Run Backend Tests"
+        working-directory: app/backend
         run: |
-          cd app/backend
-          npm install
+          npm ci
           npm test
 
-  build-scan-sign-deploy:
-    name: "Build, Scan, Sign & Deploy"
+  # ------------------------------------------------------------------
+  # 2. BUILD -> SCAN -> PUSH -> SIGN (one job per image)
+  # ------------------------------------------------------------------
+  build-scan-sign:
+    name: "Build, Scan & Sign (${{ matrix.service }})"
     needs: test-application
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [backend, frontend]
+    env:
+      IMAGE_TAG: ${{ github.sha }}
     steps:
       - name: "Checkout Code"
         uses: actions/checkout@v4
 
-      # 1. Install Cosign (Sigstore)
       - name: "Install Cosign"
         uses: sigstore/cosign-installer@v3.4.0
 
-      # 2. Authenticate to AWS
+      - name: "Assume AWS Role via OIDC (no stored AWS keys)"
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          audience: "sts.amazonaws.com"
+
+      - name: "Login to Amazon ECR"
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: "Build Image"
+        working-directory: app/${{ matrix.service }}
+        env:
+          IMAGE: ${{ steps.login-ecr.outputs.registry }}/${{ env.ENVIRONMENT }}-${{ matrix.service }}
+        run: docker build -t "$IMAGE:$IMAGE_TAG" .
+
+      - name: "Trivy Scan (fails on CRITICAL)"
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ENVIRONMENT }}-${{ matrix.service }}:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL'
+
+      - name: "Push & Sign Image"
+        env:
+          IMAGE: ${{ steps.login-ecr.outputs.registry }}/${{ env.ENVIRONMENT }}-${{ matrix.service }}
+        run: |
+          # Immutable SHA tag = what gets deployed; :latest is only the Terraform bootstrap tag
+          docker tag "$IMAGE:$IMAGE_TAG" "$IMAGE:latest"
+          docker push "$IMAGE:$IMAGE_TAG"
+          docker push "$IMAGE:latest"
+
+          # Sign the pushed digest (keyless, via the GitHub OIDC identity)
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:$IMAGE_TAG")
+          cosign sign --yes "$DIGEST"
+
+  # ------------------------------------------------------------------
+  # 3. DEPLOY (only after BOTH images passed test + scan + push)
+  # ------------------------------------------------------------------
+  deploy:
+    name: "Deploy (${{ matrix.service }})"
+    needs: build-scan-sign
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, frontend]
+    steps:
       - name: "Assume AWS Role via OIDC"
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -55,91 +124,28 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           audience: "sts.amazonaws.com"
 
-      # 3. Login to AWS ECR
       - name: "Login to Amazon ECR"
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # ==========================================
-      # 4. BACKEND: Build, Scan, Push, Sign
-      # ==========================================
-      - name: "Build Backend Image"
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: "${{ env.ENVIRONMENT }}-backend"
-          IMAGE_TAG: ${{ github.sha }}
+      - name: "Download current task definition"
         run: |
-          cd app/backend
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          aws ecs describe-task-definition \
+            --task-definition "${{ env.ENVIRONMENT }}-${{ matrix.service }}-task" \
+            --query taskDefinition > task-definition.json
 
-      - name: "Trivy Scan: Backend Image"
-        uses: aquasecurity/trivy-action@master
+      - name: "Render task definition with the new image (:git-sha)"
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ENVIRONMENT }}-backend:${{ github.sha }}'
-          format: 'table'
-          exit-code: '1' # Fails the pipeline if CRITICAL vulnerabilities exist
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL'
+          task-definition: task-definition.json
+          container-name: ${{ matrix.service }}
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ENVIRONMENT }}-${{ matrix.service }}:${{ github.sha }}
 
-      - name: "Push & Sign Backend Image"
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: "${{ env.ENVIRONMENT }}-backend"
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          # Push the SHA tag and Latest tag
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          
-          # Cosign Keyless Signature attached directly to the ECR Image SHA
-          cosign sign --yes $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-
-      # ==========================================
-      # 5. FRONTEND: Build, Scan, Push, Sign
-      # ==========================================
-      - name: "Build Frontend Image"
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: "${{ env.ENVIRONMENT }}-frontend"
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          cd app/frontend
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-
-      - name: "Trivy Scan: Frontend Image"
-        uses: aquasecurity/trivy-action@master
+      - name: "Deploy to ECS (rolling update, waits for stability, auto-rollback on failure)"
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ENVIRONMENT }}-frontend:${{ github.sha }}'
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL'
-
-      - name: "Push & Sign Frontend Image"
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: "${{ env.ENVIRONMENT }}-frontend"
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          cosign sign --yes $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-
-      # ==========================================
-      # 6. DEPLOY TO AWS ECS
-      # ==========================================
-      - name: "Deploy to Amazon ECS (Zero Downtime Rolling Update)"
-        run: |
-          aws ecs update-service \
-            --cluster "${{ env.ENVIRONMENT }}-ecs-cluster" \
-            --service "${{ env.ENVIRONMENT }}-backend-service" \
-            --force-new-deployment
-
-          aws ecs update-service \
-            --cluster "${{ env.ENVIRONMENT }}-ecs-cluster" \
-            --service "${{ env.ENVIRONMENT }}-frontend-service" \
-            --force-new-deployment
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.ENVIRONMENT }}-ecs-cluster
+          service: ${{ env.ENVIRONMENT }}-${{ matrix.service }}-service
+          wait-for-service-stability: true

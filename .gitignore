@@ -1,0 +1,23 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!terraform.tfvars.example
+tfplan
+# NOTE: commit terraform/.terraform.lock.hcl (provider version pinning)
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Env / secrets
+.env
+.env.*
+*.pem
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

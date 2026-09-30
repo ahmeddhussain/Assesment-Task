@@ -3,7 +3,7 @@ const mysql = require('mysql2/promise');
 
 const PORT = process.env.PORT || 3000;
 
-// Database Connection Pool (Uses ENV vars that Terraform will inject in ECS)
+// Database Connection Pool (env vars are injected by ECS from Secrets Manager)
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
@@ -11,8 +11,14 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME || 'test',
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  connectTimeout: 5000 // fail fast so health checks never hang
 });
+
+const sendJson = (res, status, body) => {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+};
 
 const server = http.createServer(async (req, res) => {
   // CORS Headers
@@ -20,34 +26,33 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
-// 1. Health Check (Handles internal ALB health checks AND frontend /api/health calls)
-  if ((req.url === '/health' || req.url === '/api/health') && req.method === 'GET') {    try {
+  // 1. Health Check (ALB health checks AND frontend /api/health calls)
+  if ((req.url === '/health' || req.url === '/api/health') && req.method === 'GET') {
+    try {
       await pool.query('SELECT 1');
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'UP', database: 'CONNECTED' }));
+      return sendJson(res, 200, { status: 'UP', database: 'CONNECTED' });
     } catch (error) {
-      res.writeHead(503, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'DOWN', database: 'DISCONNECTED', error: error.message }));
+      // Full error goes to CloudWatch Logs only - never to the public response
+      console.error('Health check failed:', error.code || error.message);
+      return sendJson(res, 503, { status: 'DOWN', database: 'DISCONNECTED' });
     }
   }
 
-  // 2. Metrics Endpoint (For CloudWatch/Prometheus integration)
+  // 2. Metrics Endpoint (not routed by the ALB - internal use only)
   if (req.url === '/metrics' && req.method === 'GET') {
     const memory = process.memoryUsage();
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({
+    return sendJson(res, 200, {
       uptime_seconds: process.uptime(),
       memory_rss_bytes: memory.rss,
       memory_heap_used_bytes: memory.heapUsed
-    }));
+    });
   }
 
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'Route not found' }));
+  return sendJson(res, 404, { error: 'Route not found' });
 });
 
-// Best Practice: Graceful Shutdown for ECS Container Scaling
-const gracefulShutdown = async (signal) => {
+// Graceful shutdown so ECS can drain tasks cleanly on deploy / scale-in
+const gracefulShutdown = (signal) => {
   console.log(`Received ${signal}. Closing HTTP server and DB connections...`);
   server.close(async () => {
     console.log('HTTP server closed.');

@@ -6,7 +6,7 @@ variable "aws_region" {
 
 variable "environment" {
   type        = string
-  description = "Deployment environment"
+  description = "Deployment environment (used as a prefix in every resource name)"
   default     = "dev"
 }
 
@@ -18,6 +18,5 @@ variable "db_name" {
 
 variable "alert_email" {
   type        = string
-  description = "Email to receive CloudWatch 5XX error alerts"
-  default     = "ahmedkhater2611@gmail.com"
+  description = "Email that receives CloudWatch alarm notifications (supplied via TF_VAR_alert_email / tfvars)"
 }

@@ -5,12 +5,17 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 
 provider "aws" {
   region = var.aws_region
 
+  # Consistent tagging convention applied to every taggable resource
   default_tags {
     tags = {
       Project     = "DevOps-Assessment"

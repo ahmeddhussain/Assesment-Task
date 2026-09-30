@@ -1,3 +1,12 @@
+# Use the region's real AZs instead of hardcoding them
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+locals {
+  azs = slice(data.aws_availability_zones.available.names, 0, 2)
+}
+
 # 1. Networking Module
 module "networking" {
   source               = "./modules/networking"
@@ -5,10 +14,10 @@ module "networking" {
   vpc_cidr             = "10.0.0.0/16"
   public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
   private_subnet_cidrs = ["10.0.3.0/24", "10.0.4.0/24"]
-  availability_zones   = ["us-east-1a", "us-east-1b"]
+  availability_zones   = local.azs
 }
 
-# 2. Database Module (Generates password and spins up encrypted RDS)
+# 2. Database Module (generates password and spins up encrypted RDS)
 module "database" {
   source      = "./modules/database"
   environment = var.environment
@@ -17,7 +26,7 @@ module "database" {
   db_name     = var.db_name
 }
 
-# 3. Secrets Manager Module (Bundles all config into Secrets Manager)
+# 3. Secrets Manager Module (bundles all app config into one secret)
 module "secrets" {
   source      = "./modules/secrets"
   environment = var.environment
@@ -28,7 +37,7 @@ module "secrets" {
   app_port    = "3000"
 }
 
-# 4. Compute Module (ALB + ECS Fargate pulling from Secrets Manager)
+# 4. Compute Module (ALB + ECS Fargate + ECR + log groups)
 module "compute" {
   source               = "./modules/compute"
   environment          = var.environment
@@ -39,10 +48,14 @@ module "compute" {
   app_secret_arn       = module.secrets.secret_arn
 }
 
-# 5. Monitoring Module (CloudWatch Alarms & SNS)
+# 5. Monitoring Module (CloudWatch alarms + SNS email)
 module "monitoring" {
-  source         = "./modules/monitoring"
-  environment    = var.environment
-  alb_arn_suffix = module.compute.alb_arn_suffix
-  alert_email    = var.alert_email
+  source                 = "./modules/monitoring"
+  environment            = var.environment
+  alert_email            = var.alert_email
+  alb_arn_suffix         = module.compute.alb_arn_suffix
+  backend_tg_arn_suffix  = module.compute.backend_tg_arn_suffix
+  ecs_cluster_name       = module.compute.ecs_cluster_name
+  backend_service_name   = module.compute.backend_service_name
+  db_instance_identifier = module.database.db_instance_identifier
 }
