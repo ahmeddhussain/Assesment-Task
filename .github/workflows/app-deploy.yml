@@ -32,7 +32,7 @@ jobs:
       - name: "Run Backend Tests"
         run: |
           cd app/backend
-          npm ci
+          npm install
           npm test
 
   build-scan-sign-deploy:
