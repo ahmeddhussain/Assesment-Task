@@ -273,8 +273,8 @@ resource "aws_ecs_task_definition" "backend" {
 
   container_definitions = jsonencode([
     {
-      name         = "backend"
-      image        = "${aws_ecr_repository.backend.repository_url}:latest" # Bootstrap image only. CI/CD replaces this with an immutable Git SHA tag.
+      name  = "backend"
+      image = "${aws_ecr_repository.backend.repository_url}:latest" # Bootstrap image only. CI/CD replaces this with an immutable Git SHA tag.
 
       essential    = true
       portMappings = [{ containerPort = 3000, hostPort = 3000 }]
@@ -310,8 +310,8 @@ resource "aws_ecs_task_definition" "frontend" {
 
   container_definitions = jsonencode([
     {
-      name         = "frontend"
-      image        = "${aws_ecr_repository.frontend.repository_url}:latest" # Bootstrap image only. CI/CD replaces this with an immutable Git SHA tag.
+      name  = "frontend"
+      image = "${aws_ecr_repository.frontend.repository_url}:latest" # Bootstrap image only. CI/CD replaces this with an immutable Git SHA tag.
 
       essential    = true
       portMappings = [{ containerPort = 8080, hostPort = 8080 }]
