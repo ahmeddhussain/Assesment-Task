@@ -1,24 +1,17 @@
-# Stage 1: Build 
-FROM node:20-alpine AS builder
+# Stage 1: Build using the latest Active LTS (Node 22)
+FROM node:22-alpine AS builder
 WORKDIR /app
 
-# Upgrade global npm to patch upstream vulnerabilities in the base image
-RUN npm install -g npm@latest
-
 COPY package.json package-lock.json* ./
-
-# Force a clean install and ensure tar is updated
-RUN npm install && npm update tar
+RUN npm install
 
 COPY server.js server.test.js ./
 
 # Stage 2: Production (Minimal & Secure)
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
 
-# Upgrade global npm here too just to be absolutely secure
-RUN npm install -g npm@latest
-
+# Security Best Practice: Create a non-root user
 RUN addgroup -S nodeapp && adduser -S nodeapp -G nodeapp
 
 COPY --from=builder --chown=nodeapp:nodeapp /app /app
