@@ -20,9 +20,8 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
-  // 1. Health Check (Checks both API and DB)
-  if (req.url === '/health' && req.method === 'GET') {
-    try {
+// 1. Health Check (Handles internal ALB health checks AND frontend /api/health calls)
+  if ((req.url === '/health' || req.url === '/api/health') && req.method === 'GET') {    try {
       await pool.query('SELECT 1');
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ status: 'UP', database: 'CONNECTED' }));
