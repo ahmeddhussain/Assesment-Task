@@ -114,39 +114,7 @@ The page performs an asynchronous health verification and displays **SUCCESS** w
 
 ### High-Level Network & Infrastructure Topology
 
-```text
-                                  [ PUBLIC INTERNET ]
-                                           │
-                                           │ HTTP (Port 80)
-                                           ▼
-                     +───────────────────────────────────────────+
-                     │     AWS Application Load Balancer (ALB)   │
-                     │     - Public Subnets (us-east-1a, 1b)     │
-                     │     - Security Group: Ingress :80 (0.0/0) │
-                     +─────────────────────┬─────────────────────+
-                                           │
-                    ┌──────────────────────┴──────────────────────┐
-              Path: / (Default)                             Path: /api/*
-                    │                                             │
-                    ▼                                             ▼
-       +──────────────────────────+                  +──────────────────────────+
-       │ Frontend ECS Task        │                  │ Backend ECS Task         │
-       │ - Nginx Unprivileged     │                  │ - Node.js 22 LTS         │
-       │ - Private Subnet (No IP) │                  │ - Private Subnet (No IP) │
-       │ - SG: Ingress from ALB SG│                  │ - SG: Ingress from ALB SG│
-       +──────────────────────────+                  +────────────┬─────────────+
-                                                                  │
-                                                                  │ MySQL :3306
-                                                                  │ (Internal VPC)
-                                                                  ▼
-+───────────────────────────+                        +──────────────────────────+
-| AWS Secrets Manager       |                        | Managed RDS MySQL 8.0    |
-| - DB_HOST, DB_USER,       |◄───────────────────────| - Private Subnets Only   |
-|   DB_PASS, DB_NAME, PORT  | (Injects via Task      | - Storage Encrypted KMS  |
-| - Zero Plaintext in Git   |  Execution Role)       | - SG: Ingress strictly   |
-+───────────────────────────+                        |   from ECS Task SG       |
-                                                     +──────────────────────────+
-```
+![](screenshots/architecture.png)
 
 ### Complete Platform Flow (Mermaid)
 
