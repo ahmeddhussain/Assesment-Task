@@ -170,7 +170,7 @@ Navigate to **Settings → Secrets and variables → Actions** and set:
 
 | Secret Name | Description | Example Value |
 |---|---|---|
-| `AWS_ROLE_ARN` | IAM Role ARN configured for OIDC | `arn:aws:iam::800770414458:role/github-actions-assessment-role` |
+| `AWS_ROLE_TO_ASSUME` | IAM Role ARN configured for OIDC | `arn:aws:iam::800770414458:role/github-actions-assessment-role` |
 | `ALERT_EMAIL` | Destination email for SNS alerts | `operator@example.com` *(keeps personal data out of code)* |
 
 ### 4. Deploy Infrastructure via GitHub Actions
@@ -319,7 +319,7 @@ graph TD
     DEPLOY --> WAIT["Wait for Service Stability<br/>Rollback on Failure"]
 ```
 
-* **Vulnerability Scanning (Trivy):** Pinned Trivy action (`aquasecurity/trivy-action@0.28.0`) scans each image and fails on `CRITICAL` severity findings before push.
+* **Vulnerability Scanning (Trivy):** Pinned Trivy action (`aquasecurity/trivy-action@0.35.0`) scans each image and fails on `CRITICAL` severity findings before push.
 * **Cryptographic Provenance (Cosign):** Keyless signing attaches cryptographic provenance to the immutable **image digest** in ECR using the GitHub Actions OIDC identity.
 * **Immutable Deployments:** ECS task definitions explicitly reference the exact `:git-sha` image tag rather than `:latest`.
 

@@ -97,11 +97,10 @@ jobs:
         env:
           IMAGE: ${{ steps.login-ecr.outputs.registry }}/${{ env.ENVIRONMENT }}-${{ matrix.service }}
         run: |
-          # Immutable SHA tag = what gets deployed; :latest is only the Terraform bootstrap tag
-          docker tag "$IMAGE:$IMAGE_TAG" "$IMAGE:latest"
+          # Deploy only immutable Git SHA tags
+          
           docker push "$IMAGE:$IMAGE_TAG"
-          docker push "$IMAGE:latest"
-
+         
           # Sign the pushed digest (keyless, via the GitHub OIDC identity)
           DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:$IMAGE_TAG")
           cosign sign --yes "$DIGEST"
