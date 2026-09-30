@@ -293,3 +293,18 @@ resource "aws_iam_role_policy" "ecs_logs_policy" {
     }]
   })
 }
+# Allow ECS to read the application configuration from Secrets Manager
+resource "aws_iam_role_policy" "ecs_secrets_policy" {
+  name = "${var.environment}-ecs-secrets-policy"
+  role = aws_iam_role.ecs_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      # Using a wildcard at the end ensures the random 6-character suffix AWS adds doesn't cause a mismatch
+      Resource = "${var.app_secret_arn}*"
+    }]
+  })
+}
