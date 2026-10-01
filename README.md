@@ -75,6 +75,7 @@ Database Host:      dev-mysql-db.c83skyye8aus.us-east-1.rds.amazonaws.com (Priva
 * **ECS Fargate over EC2 / EKS:** Eliminates operating system patching and node management overhead. Provides per-task IAM roles with a smaller operational attack surface than Kubernetes for a two-container application, fitting a 4–6 hour assessment scope while demonstrating production-grade infrastructure decisions.
 * **Amazon RDS over In-Cluster Database:** Offloads snapshot backups, automated minor engine patching, and storage-level encryption to AWS, completely separating database lifecycle from ephemeral application containers.
 * **Modular Terraform:** Preferred IaC tool; ensures strict separation of concerns, DRY code, and reusable modules across environments.
+* **AWS Account & Free Tier Usage:** This project was built and verified in a personal AWS account on the AWS Free Tier plan and the credit pays for everything, every resource below has a real cost that consumes the balance, which is why the environment is `destroyed` with the destroy action as soon as verification is done, but cost optimization was taken in some cases of the task.
 
 ---
 
@@ -149,21 +150,40 @@ docker compose down -v
 To prevent chicken-and-egg dependency locks, the S3 state bucket and GitHub Actions IAM OIDC provider are configured once out-of-band before Terraform executes.
 
 ### 1. Configure the S3 State Storage Bucket
-Create an S3 bucket via the console and The state bucket is configured out-of-band with:
+Create the Terraform state bucket once, manually (console or CLI), **before the first `terraform init`**. S3 bucket names are global, so the name must match the `bucket` value in `terraform/backend.tf` (`ahmed-statefile` in this repo). Configure the bucket with:
 - S3 Block Public Access enabled
 - S3 Versioning enabled
 - Server-side encryption enabled
 - Access restricted to the Terraform deployment identity
-- No public bucket access
-- enable `State locking` which uses native S3 conditional writes (`use_lockfile = true`) in Terraform 1.10+, eliminating DynamoDB costs.
+- State locking through native S3 conditional writes (`use_lockfile = true`, Terraform 1.10+), which removes the need for a DynamoDB table
 
 ### 2. Configure GitHub Actions OIDC Provider & IAM Role
 1. **Identity Provider:** Open **IAM** → **Identity Providers** → **Add Provider** (`OpenID Connect`, URL: `https://token.actions.githubusercontent.com`, Audience: `sts.amazonaws.com`).
-2. **IAM Role Trust Policy:** Create `github-actions-assessment-role` .
+2. **IAM Role Trust Policy:** Create `github-actions-assessment-role` with the example trust policy below. The `sub` condition pins the role to workflows that run on the `main` branch of this repository, so no other repo or branch can assume it:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:ahmeddhussain/Assesment-Task:ref:refs/heads/main"
+        }
+      }
+    }
+  ]
+}
+```
 
 #### Required Role Permissions
 * **Terraform Infrastructure Workflow:** Scoped policies to manage VPC, RDS, ECS, ECR, ELB, IAM, Secrets Manager, CloudWatch, SNS, KMS, and S3 state operations.
-* **Application Deployment Workflow:** `ecr:GetAuthorizationToken`, ECR push permissions, `ecs:DescribeTaskDefinition`, `ecs:RegisterTaskDefinition`, `ecs:UpdateService`, `ecs:DescribeServices`, and `iam:PassRole` on task and execution roles.
+* **Application Deployment Workflow:** `ecr:GetAuthorizationToken`, ECR push permissions (the Cosign signature is pushed to ECR with the same permissions), `ecs:DescribeTaskDefinition`, `ecs:RegisterTaskDefinition`, `ecs:UpdateService`, `ecs:DescribeServices`, and `iam:PassRole` on the **ECS task execution role** only (`<env>-ecs-execution-role`). No task role exists.
 
 ### 3. Configure GitHub Repository Secrets
 Navigate to **Settings → Secrets and variables → Actions** and set:
@@ -182,6 +202,8 @@ Navigate to **Settings → Secrets and variables → Actions** and set:
 
 ### 5. Deploy Application Services
 Push any change under `app/**` to `main`. The pipeline automatically tests, builds, scans with Trivy, signs with Cosign, registers updated task definitions with immutable SHA tags, and triggers zero-downtime rolling updates.
+
+> **First deployment note:** Terraform's task definitions point at a `:latest` bootstrap tag that is never pushed (the ECR repositories are `IMMUTABLE` and CI only pushes SHA tags). Right after the first `apply`, the ECS tasks therefore cannot pull an image until the application pipeline has run once. A push only triggers the pipeline when files under `app/**` change, so it can be started manually the first time: **Actions → Application Build, SecScan & Deploy → Run workflow**. From that run onward every deployment uses an immutable SHA-tagged task definition.
 
 ![App CI Run](screenshots/app-ci.png)
 
@@ -234,9 +256,9 @@ $$\text{Networking} \longrightarrow \text{Database} \longrightarrow \text{Secret
 
 | Identity | Security Scope |
 |---|---|
-| **GitHub Actions Role** | Assumed strictly through OIDC; no long-lived access keys. Trust policy validates repo claim `repo:ahmeddhussain/Assesment-Task:*`. |
+| **GitHub Actions Role** | Assumed strictly through OIDC; no long-lived access keys. Trust policy pins the subject claim to `repo:ahmeddhussain/Assesment-Task:ref:refs/heads/main`, so only workflows on `main` can assume it. |
 | **ECS Task Execution Role** | Assumed by the **AWS ECS Agent** at launch (outside the container). Grants permissions to pull images from Amazon ECR, stream logs to CloudWatch (`PutLogEvents`), and decrypt credentials from Secrets Manager (`secretsmanager:GetSecretValue` on `${var.app_secret_arn}*`). |
-| **ECS Task Role** | Assumed by the **application code at runtime** (inside the container). Scoped with **zero AWS permissions** (strict least privilege): because the Node.js API connects to MySQL over standard TCP (:3306) and makes no AWS SDK calls, a compromised container possesses no AWS credentials to access cloud APIs. |
+| **ECS Task Role** | **Intentionally not created.** The only role in the task definitions is the *execution role* above, which is used by the ECS agent (not by the application). The application code itself has no role (strict least privilege): because the Node.js API connects to MySQL over standard TCP (:3306) and makes no AWS SDK calls, a compromised container possesses no AWS credentials to access cloud APIs. |
 
 #### Note on ECS Egress:
 
@@ -254,7 +276,7 @@ For a production deployment, VPC endpoints would be introduced for supported AWS
      │ (Port 8080 & 3000 strictly from ALB SG ID)
      ▼
 [ ECS Container Security Group ]
-     │ (Port 3306 strictly from ECS Task SG ID )
+     │ (Port 3306 strictly from ECS Task SG ID)
      ▼
 [ RDS Database Security Group ]
 ```
@@ -292,6 +314,24 @@ graph LR
 ```
 
 The ECS Task Definition maps each JSON key directly to a container environment variable. Plaintext secrets are never stored on container disks or written to standard logs.
+
+---
+
+### How the CI/CD Pipeline Handles Secrets
+ 
+No secret value is stored in the repository, the workflow files, the Docker images, or any committed `.tfvars` file (`*.tfvars` is git-ignored; only `terraform.tfvars.example` is committed).
+ 
+| Credential | Where it lives | How the pipeline uses it |
+|---|---|---|
+| AWS access | **No access keys exist.** GitHub issues a short-lived OIDC token per run; AWS STS exchanges it for temporary credentials | `aws-actions/configure-aws-credentials` assumes the role in `AWS_ROLE_TO_ASSUME` |
+| `AWS_ROLE_TO_ASSUME` | GitHub Actions secret (a role ARN, not a credential) | Identifies which role to assume |
+| `ALERT_EMAIL` | GitHub Actions secret | Passed to Terraform as `TF_VAR_alert_email`, so no email address is committed |
+| Database password | Generated by Terraform (`random_password`) and stored in AWS Secrets Manager | Never stored in GitHub. ECS injects it into the backend container at task start; the application pipeline never sees it |
+| Image signing | Cosign **keyless** signing with the workflow's OIDC identity | There is no private signing key to store |
+ 
+GitHub masks secret values in workflow logs, and the workflows request only `id-token: write` and `contents: read`.
+ 
+**Known limitation:** because Terraform generates the database password, it is also written to the Terraform state. The state bucket is encrypted, versioned, and not public, which is acceptable for this scope. In production I would restrict access to the state further and switch to RDS-managed master credentials (`manage_master_user_password`) so the password never enters state at all.
 
 ---
 
@@ -374,9 +414,9 @@ All alarms notify the `dev-infrastructure-alerts` SNS topic, which forwards aler
 | Alarm Name | Metric Evaluated | Threshold | Operational Objective |
 |---|---|---|---|
 | `dev-alb-high-5xx-errors` | `HTTPCode_Target_5XX_Count` | `> 5 in 1 minute` | Detects backend 5XX error spikes |
-| `dev-backend-unhealthy-hosts` | `UnHealthyHostCount` | `>= 1 for 1 minute` | Detects failing container healthchecks |
-| `dev-backend-cpu-high` | `CPUUtilization` | `> 80% for 5 minutes` | Early warning for compute saturation |
-| `dev-rds-low-storage` | `FreeStorageSpace` | `< 5GB for 5 minutes` | Prevents database disk exhaustion |
+| `dev-backend-unhealthy-hosts` | `UnHealthyHostCount` | `>= 1 for 2 consecutive minutes` | Detects failing container healthchecks |
+| `dev-backend-cpu-high` | `CPUUtilization` | `> 80% for 10 minutes (2 x 5-min periods)` | Early warning for compute saturation |
+| `dev-rds-low-free-storage` | `FreeStorageSpace` | `< 5 GiB (one 5-min period)` | Prevents database disk exhaustion |
 
 ---
 
@@ -429,10 +469,11 @@ Verify the end-to-end alerting pipeline using the CLI:
 
 Practical compromises made to align with the 4–6 hour scope and AWS sandbox budget:
 
-* **Hourly Billed Ingress & Egress:** Managed RDS (`db.t3.micro`) and Fargate fall within low-cost/free tiers, but the **NAT Gateway and ALB are billed hourly**. The infrastructure was destroyed after verification.
-* **Single-AZ Database & Single NAT Gateway:** Reduces sandbox costs by avoiding multi-AZ hourly multipliers, trading high availability for cost efficiency.
+* **Hourly Billed Components:** Everything draws from the credit balance at normal rates. RDS (`db.t3.micro`) and Fargate (smallest size) are low-cost, but the **NAT Gateway and ALB are billed hourly** whether or not traffic flows. The infrastructure was destroyed after verification.
+* **Single-AZ Database & Single NAT Gateway:** Reduces credit consumption by avoiding multi-AZ hourly multipliers, trading high availability for cost efficiency.
 * **HTTP-Only Public Entrypoint:** Avoids requiring a registered domain and public ACM certificate validation.
 * **Image Provenance vs Admission Enforcement:** Images are signed with Cosign to establish build provenance. Admission-controller signature verification is not enforced at Fargate launch time.
+* **Generated DB Password Lives in Terraform State:** The password created by `random_password` is also stored in the (encrypted, private, versioned) S3 state. See *How the CI/CD Pipeline Handles Secrets* for the production alternative.
 * **Single State Key:** A single state key is used in `backend.tf` for this assessment demo. Multi-environment architectures would use dedicated state prefixes per environment.
 * **Terraform uses the `latest` ECR tag only for the initial ECS service bootstrap.** Normal application deployments do not use `latest`. GitHub Actions builds and pushes images using the immutable Git commit SHA:`<git-sha>`. The CI/CD workflow then registers a new ECS task definition using that SHA-tagged image and deploys it to ECS.
 
