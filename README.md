@@ -38,12 +38,13 @@ A fully automated cloud platform provisioning a hardened 3-tier web application 
 7. [Infrastructure as Code (Terraform)](#infrastructure-as-code-terraform)
 8. [Security & Least Privilege](#security--least-privilege)
 9. [Secrets Management](#secrets-management)
-10. [Containerization & Supply Chain Security](#containerization--supply-chain-security)
-11. [CI/CD Pipelines](#cicd-pipelines)
-12. [Monitoring, Logging & Alerting](#monitoring-logging--alerting)
-13. [System Verification & Live Testing](#system-verification--live-testing)
-14. [Trade-offs & Cost Notes](#trade-offs--cost-notes)
-15. [Production Considerations](#production-considerations)
+10. [How the CI/CD Pipeline Handles Secrets](#how-the-cicd-pipeline-handles-secrets)
+11. [Containerization & Supply Chain Security](#containerization--supply-chain-security)
+12. [CI/CD Pipelines](#cicd-pipelines)
+13. [Monitoring, Logging & Alerting](#monitoring-logging--alerting)
+14. [System Verification & Live Testing](#system-verification--live-testing)
+15. [Trade-offs & Cost Notes](#trade-offs--cost-notes)
+16. [Production Considerations](#production-considerations)
 
 
 ---
