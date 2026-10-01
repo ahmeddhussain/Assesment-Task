@@ -66,7 +66,7 @@ Target Environment: AWS (us-east-1)
 Public Entrypoint:  http://dev-alb-1624663385.us-east-1.elb.amazonaws.com
 Database Host:      dev-mysql-db.c83skyye8aus.us-east-1.rds.amazonaws.com (Private DNS)
 ```
-> *Note: Hostnames represent verified assessment run instances. The environment is destroyed after verification to prevent continuous sandbox charges.*
+> *Note: Hostnames represent verified assessment run instances. The environment is destroyed after verification to prevent continuous charges.*
 
 ---
 
@@ -191,7 +191,7 @@ Navigate to **Settings → Secrets and variables → Actions** and set:
 
 | Secret Name | Description | Example Value |
 |---|---|---|
-| `AWS_ROLE_TO_ASSUME` | IAM Role ARN configured for OIDC | `arn:aws:iam::800770414458:role/github-actions-assessment-role` |
+| `AWS_ROLE_TO_ASSUME` | IAM Role ARN configured for OIDC | `arn:aws:iam::123456789:role/github-actions-assessment-role` |
 | `ALERT_EMAIL` | Destination email for SNS alerts | `operator@example.com` *(keeps personal data out of code)* |
 
 ### 4. Deploy Infrastructure via GitHub Actions
@@ -217,7 +217,7 @@ All cloud infrastructure is organized in modular Terraform directories:
 ```text
 terraform/
 ├── backend.tf                  # S3 remote state, native locking (TF 1.10+)
-├── providers.tf                # AWS + random providers, default_tags
+├── provider.tf                # AWS + random providers, default_tags
 ├── variables.tf                # Input variables (no hardcoded secrets or personal emails)
 ├── main.tf                     # Root module orchestration
 ├── outputs.tf                  # ALB DNS and RDS endpoint
@@ -287,7 +287,7 @@ For a production deployment, VPC endpoints would be introduced for supported AWS
 
 ### Data Protection & Cryptography
 * **At Rest:** RDS storage is encrypted using AWS KMS (`storage_encrypted = true`). ECR repositories enable AES-256 server-side encryption. Secrets Manager encrypts data at rest using KMS.
-* **In Transit:** Internal VPC traffic runs on isolated private AWS fibers. HTTP is used at the public edge to fit the sandbox scope, with HTTPS planned via ACM for production.
+* **In Transit:** Internal VPC traffic runs on isolated private AWS fibers. HTTP is used at the public edge to fit the task scope, with HTTPS planned via ACM for production.
 * **Information Leakage Prevention:** The application health check responds with generic `503 Service Unavailable` on failures; database exception traces are confined to CloudWatch Logs.
 
 ---
@@ -383,7 +383,7 @@ Infrastructure and application delivery lifecycles are decoupled into separate w
   2. **Matrix Build:** Builds backend and frontend in parallel, tagging images with `${{ github.sha }}`.
   3. **Security Gate:** Runs Trivy scans on both images; deployments proceed only if **both** images pass.
   4. **Signing:** Cosign signs the pushed ECR image digests.
-  5. **Continuous Deployment:** Registers a new task definition revision referencing the `${{ github.sha }}` tag, updates ECS services, and executes `aws ecs wait services-stable`. If the rollout fails, the ECS deployment circuit breaker automatically rolls back to the last healthy revision.
+  5. **Continuous Deployment:** Registers a new task definition revision referencing the `${{ github.sha }}` tag, updates ECS services, and executes `wait-for-service-stability: true`. If the rollout fails, the ECS deployment circuit breaker automatically rolls back to the last healthy revision.
 
 | ECS Cluster Overview | Backend Service Deployment | Frontend Service Deployment |
 | :---: | :---: | :---: |
@@ -468,7 +468,7 @@ Verify the end-to-end alerting pipeline using the CLI:
 
 ## Trade-offs & Cost Notes
 
-Practical compromises made to align with the 4–6 hour scope and AWS sandbox budget:
+Practical compromises made to align with the 4–6 hour scope and AWS Free tier:
 
 * **Hourly Billed Components:** Everything draws from the credit balance at normal rates. RDS (`db.t3.micro`) and Fargate (smallest size) are low-cost, but the **NAT Gateway and ALB are billed hourly** whether or not traffic flows. The infrastructure was destroyed after verification.
 * **Single-AZ Database & Single NAT Gateway:** Reduces credit consumption by avoiding multi-AZ hourly multipliers, trading high availability for cost efficiency.
